@@ -47,6 +47,10 @@
         {
             "package": "tsfeatures",
             "version":"1.1.1"
+        },
+        {
+            "package": "feasts",
+            "version":"0.3.1"
         }
     ],
     "package_dev": [
