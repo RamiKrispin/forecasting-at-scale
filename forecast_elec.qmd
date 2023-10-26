@@ -1,0 +1,300 @@
+---
+title: "Forecast US Demand for Natural Gas"
+author: "Rami Krispin"
+date: "10/26/2023"
+format: 
+  html:
+    code-fold: true
+---
+
+
+```{r}
+us_gas <- readRDS(file = "./data/us_gas.RDS")
+
+head(us_gas)
+
+
+df <- us_gas |>
+    dplyr::filter(area_name == "U.S.",
+                  process_name == "Residential Consumption")
+
+head(df)
+
+
+```
+
+
+
+``` {r}
+ts_obj <- df |> 
+            dplyr::select(date, value) |>
+            dplyr::mutate(index = tsibble::yearmonth(date)) |>
+            tsibble::as_tsibble(index = index) 
+
+
+ts_obj
+
+
+p_act <- plotly::plot_ly(ts_obj) |>
+    plotly::add_lines(x = ~ date,
+                      y = ~ value,
+                      name = "Actual") 
+                      
+                      
+p_act |>
+    plotly::layout(title = "US Demand for Natural Gas - Residual Conuption",
+                   yaxis = list(title = "MMCF"),
+                   xaxis = list(title = "Source: US Energy Information Administraion "))
+```
+
+
+
+
+STL
+
+``` {r}
+stl <- ts_obj |>
+    fabletools::model(feasts::STL(value ~ trend(window = 10) + season(window = 25))) |>
+    fabletools::components() |>
+    dplyr::left_join(ts_obj, by = c("index", "value"))
+
+head(stl)
+
+
+trend <- plotly::plot_ly(stl) |>
+    plotly::add_lines(x = ~ date,
+                      y = ~ trend, 
+                      name = "Trend") |>
+    plotly::layout(yaxis = list(title = "Trend"),
+                   xaxis = list(title = ""))
+
+
+
+seasonal <- plotly::plot_ly(stl) |>
+    plotly::add_lines(x = ~ date,
+                      y = ~ season_year,
+                      name = "Seasonal") |>
+    plotly::layout(yaxis = list(title = "Seasonal"),
+                   xaxis = list(title = ""))
+
+
+remainder <- plotly::plot_ly(stl) |>
+    plotly::add_lines(x = ~ date,
+                      y = ~ remainder,
+                      name = "Remainder") |>
+    plotly::layout(yaxis = list(title = "Remainder"),
+                   xaxis = list(title = ""))
+
+
+
+plotly::subplot(p_act, trend, seasonal, remainder, nrows = 4,
+                titleY = TRUE)
+
+
+
+```
+
+
+
+
+``` {r}
+acf <- ts_obj |> feasts::ACF(value) 
+
+
+plotly::plot_ly(acf, x = ~ lag, y = ~ acf, type = "bar") |>
+    plotly::layout(yaxis = list(title = "ACF"),
+                   xaxis = list(title = ""))
+```
+
+
+``` {r}
+split_date <- as.Date("2020-01-01")
+pi <- 0.95
+train <- ts_obj |> 
+dplyr::filter(date < split_date)
+
+test <- ts_obj |>
+dplyr::filter(date >= split_date)
+
+
+fit <- train |>
+    fabletools::model(ets = fable::ETS(value),
+                      arima = fable::ARIMA(value),
+                      tslm = fable::TSLM(value ~ trend() + season()),
+                      naive_s = fable::SNAIVE(value), 
+                      tslm_arima = fable::ARIMA(value ~ trend() + season()))
+
+
+fc <- fit |> fabletools::forecast(h = nrow(test)) 
+
+fc
+
+
+
+ yhat_dist <- sapply(fc[["value"]],  unlist)
+
+
+mu <- yhat_dist[which(grepl(pattern = "mu", x = rownames(yhat_dist))),]
+sigma <- yhat_dist[which(grepl(pattern = "sigma", x = rownames(yhat_dist))),]
+lower <- mu - stats::qnorm(p = 1 - (1 - pi) /2) * sigma
+upper <- mu + stats::qnorm(p = 1 - (1 - pi) /2) * sigma  
+
+output <- data.frame(fc[["index"]], fc[[".model"]], mu, lower, upper, sigma) |>
+    stats::setNames(c("index", "model" ,"mu", "lower", "upper" ,"sigma")) |>
+    dplyr::left_join(test, by = "index")
+
+head(output)
+
+
+
+performance <- output |> 
+    dplyr::group_by(model) |>
+    dplyr::summarise(mape = mean(abs(value - mu) / value),
+                     rmse = (mean((value - mu) ^ 2)) ^ 2) |>
+    dplyr::arrange(mape)
+
+performance
+
+
+hex_to_rgb <- function(hex){
+    rgb <- base::paste0(as.numeric(grDevices::col2rgb(hex) |> base::t()), collapse = ",")
+    return(rgb)
+}
+
+models_list <- unique(output$model)
+
+colors <- data.frame(model = models_list,
+                     color = RColorBrewer::brewer.pal(length(models_list), "Set2"))
+
+p <- plotly::plot_ly() |>
+ plotly::add_lines(x = ts_obj$date,
+                    y =  ts_obj$value,
+                    name = "Actual" )
+
+
+o <- 0.2
+
+for(i in models_list){
+    d <- output |> dplyr::filter(model == i)
+
+    c <- colors$color[which(colors$model == i)]
+    p <-  p |> 
+    plotly::add_ribbons(x = d$date,
+                    ymin = d$lower,
+                    ymax = d$upper,
+                    line = list(color = paste("rgba(",hex_to_rgb(c), ",", o, ")",
+                                                              sep = "")),
+                                    fillcolor = list(color = paste("rgba(",hex_to_rgb(c), ",", o,")",
+                                                                   sep = "")),
+                    name = paste(i, "95% PI"),
+                    showlegend = FALSE,
+                    legendgroup = i) |>
+                plotly::add_lines(x = d$date,
+                                  y = d$mu,
+                                  line = list(color = c, dash = "dash"),
+                                  name = i,
+                                  showlegend = TRUE,
+                                  legendgroup = i)
+    
+}
+ 
+
+p |>
+ plotly::layout(title = "Forecast US Demand for Natural Gas - Testing",
+                xaxis = list(title = "", range = c(as.Date("2016-01-01"), as.Date("2024-01-01"))))
+
+
+```
+
+
+``` {r}
+
+h <- 12 * 5
+
+fit <- ts_obj |>
+    fabletools::model(ets = fable::ETS(value),
+                      arima = fable::ARIMA(value),
+                      tslm = fable::TSLM(value ~ trend() + season()),
+                      naive_s = fable::SNAIVE(value), 
+                      tslm_arima = fable::ARIMA(value ~ trend() + season()))
+
+
+fc <- fit |> fabletools::forecast(h = h)
+
+fc
+
+
+
+yhat_dist <- sapply(fc[["value"]],  unlist)
+
+
+mu <- yhat_dist[which(grepl(pattern = "mu", x = rownames(yhat_dist))),]
+sigma <- yhat_dist[which(grepl(pattern = "sigma", x = rownames(yhat_dist))),]
+lower <- mu - stats::qnorm(p = 1 - (1 - pi) /2) * sigma
+upper <- mu + stats::qnorm(p = 1 - (1 - pi) /2) * sigma  
+
+fc_output <- data.frame(fc[["index"]], fc[[".model"]], mu, lower, upper, sigma) |>
+    stats::setNames(c("index", "model" ,"mu", "lower", "upper" ,"sigma")) |>
+    dplyr::mutate(date = as.Date(index))
+
+head(fc_output)
+
+```
+
+
+``` {r}
+res <- fit |>
+  fabletools::augment() |>
+  dplyr::filter(.model == "arima") |>
+  dplyr::mutate(date = as.Date(index))
+
+
+res_plot <- res |> 
+    plotly::plot_ly() |>
+    plotly::add_lines(x = res$date,
+                    y = res$.resid,
+                    name = "Residuals")
+
+
+fit_plot <- p_act |>
+    plotly::add_lines(x = res$date,
+                        y = res$.fitted,
+                        name = "Fitted")
+plotly::subplot(fit_plot, res_plot, nrows = 2)
+
+
+```
+
+
+
+``` {r}
+
+m <- "arima"
+arima_fc <- fc_output |>
+dplyr::filter(model == m)
+
+color <- "#ffafcc"
+p_act |>
+plotly::add_ribbons(x = arima_fc$date,
+                    ymin = arima_fc$lower,
+                    ymax = arima_fc$upper,
+                    line = list(color = paste("rgba(",hex_to_rgb(color), ",", o, ")",
+                                                              sep = "")),
+                                    fillcolor = list(color = paste("rgba(",hex_to_rgb(color), ",", o,")",
+                                                                   sep = "")),
+                    name = paste("95% PI"),
+                    showlegend = FALSE,
+                    legendgroup = m) |>
+                plotly::add_lines(x = arima_fc$date,
+                                  y = arima_fc$mu,
+                                  line = list(color = color, dash = "dash"),
+                                  name = "Forecast",
+                                  showlegend = TRUE,
+                                  legendgroup = m) |>
+ plotly::layout(title = "US Demand for Natural Gas Forecast",
+                yaxis = list(title = "MMCF"),
+                xaxis = list(title = "", range = c(as.Date("2016-01-01"), as.Date("2029-01-01"))))
+
+
+
+```
