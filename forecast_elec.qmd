@@ -42,7 +42,7 @@ p_act <- plotly::plot_ly(ts_obj) |>
                       
                       
 p_act |>
-    plotly::layout(title = "US Demand for Natural Gas - Residual Conuption",
+    plotly::layout(title = "US Demand for Natural Gas - Residential Consumption",
                    yaxis = list(title = "MMCF"),
                    xaxis = list(title = "Source: US Energy Information Administraion "))
 ```
