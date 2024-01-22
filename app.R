@@ -101,7 +101,15 @@ pca <- features_clean |>
 features <- cbind(features_clean, as.data.frame(pca$x[, 1:3])) |>
     dplyr::left_join(process_table, by = "process")
 
-head(features)
+features_scale <- cbind(scale(features[, 1:25]), features[, c("area_name", "process")])
+
+head(features_scale)
+
+km2 <- kmeans(features_scale[, 1:25], centers = 2, nstart = 25)
+km3 <- kmeans(features_scale[, 1:25], centers = 3, nstart = 25)
+km4 <- kmeans(features_scale[, 1:25], centers = 4, nstart = 25)
+km5 <- kmeans(features_scale[, 1:25], centers = 5, nstart = 25)
+
 
 features_list <- names(features)
 c("process", "PC1", "PC2", "PC3", "process_name")
@@ -109,6 +117,10 @@ features_list <- features_list[-which(features_list %in% c("process", "PC1", "PC
 
 
 
+features$cluster2 <- km2[1]$cluster
+features$cluster3 <- km3[1]$cluster
+features$cluster4 <- km4[1]$cluster
+features$cluster5 <- km5[1]$cluster
 
 
 # UI ----
@@ -119,11 +131,31 @@ ui <- fluidPage(
         sidebarPanel(
             width = 2,
             selectInput(
-                inputId = "color",
-                label = "Select Variable",
-                choices = c(features_list, "area_name", "process_name"),
-                selected = "area_name",
+                inputId = "view",
+                label = "View By:",
+                choices = c("Variable", "Cluster"),
+                selected = "Variable",
                 multiple = FALSE
+            ),
+            conditionalPanel(
+                condition = "input.view == 'Variable'",
+                selectInput(
+                    inputId = "color",
+                    label = "Select Variable",
+                    choices = c(features_list, "area_name", "process_name"),
+                    selected = "area_name",
+                    multiple = FALSE
+                )
+            ),
+            conditionalPanel(
+                condition = "input.view == 'Cluster'",
+                selectInput(
+                    inputId = "c_num",
+                    label = "Number of Clusters:",
+                    choices = c(2:5),
+                    selected = 2,
+                    multiple = FALSE
+                )
             ),
             selectInput(
                 inputId = "pc",
@@ -136,6 +168,10 @@ ui <- fluidPage(
         mainPanel(
             width = 10,
             plotly::plotlyOutput("pca_plot", height = "500px", width = "100%"),
+            conditionalPanel(
+                condition = "input.view == 'Cluster'",
+                plotly::plotlyOutput("cluster_plot", height = "400px")
+            ),
             plotly::plotlyOutput("series", height = "400px")
         )
     )
@@ -144,25 +180,48 @@ ui <- fluidPage(
 # Server ----
 server <- function(input, output) {
     output$pca_plot <- plotly::renderPlotly({
-        if (input$pc == "Two") {
-            p <- plotly::plot_ly(features,
-                x = ~PC1,
-                y = ~PC2,
-                color = ~ get(input$color),
-                type = "scatter",
-                mode = "markers"
-            ) #|>
-            # plotly::layout(dragmode = "select") |>
-            # plotly::event_register("m_s")
-        } else {
-            p <- plotly::plot_ly(features,
-                x = ~PC1,
-                y = ~PC2,
-                z = ~PC3,
-                color = ~ get(input$color)
-            ) #|>
-            # plotly::layout(dragmode = "select") |>
-            # plotly::event_register("m_s")
+        if (input$view == "Variable") {
+            if (input$pc == "Two") {
+                p <- plotly::plot_ly(features,
+                    x = ~PC1,
+                    y = ~PC2,
+                    color = ~ get(input$color),
+                    type = "scatter",
+                    mode = "markers"
+                ) #|>
+                # plotly::layout(dragmode = "select") |>
+                # plotly::event_register("m_s")
+            } else {
+                p <- plotly::plot_ly(features,
+                    x = ~PC1,
+                    y = ~PC2,
+                    z = ~PC3,
+                    color = ~ get(input$color)
+                ) #|>
+                # plotly::layout(dragmode = "select") |>
+                # plotly::event_register("m_s")
+            }
+        } else if (input$view == "Cluster") {
+            if (input$pc == "Two") {
+                p <- plotly::plot_ly(features,
+                    x = ~PC1,
+                    y = ~PC2,
+                    color = ~ as.factor(get(paste("cluster", input$c_num, sep = ""))),
+                    type = "scatter",
+                    mode = "markers"
+                ) #|>
+                # plotly::layout(dragmode = "select") |>
+                # plotly::event_register("m_s")
+            } else {
+                p <- plotly::plot_ly(features,
+                    x = ~PC1,
+                    y = ~PC2,
+                    z = ~PC3,
+                    color = ~ as.factor(get(paste("cluster", input$c_num, sep = "")))
+                ) #|>
+                # plotly::layout(dragmode = "select") |>
+                # plotly::event_register("m_s")
+            }
         }
 
         return(p)
@@ -191,7 +250,63 @@ server <- function(input, output) {
                 type = "scatter",
                 mode = "line",
                 name = features$area_name[x]
-            )
+            ) |>
+                plotly::layout(
+                    title = paste("Natural Gas - ", features$process_name[x], ", ", features$area_name[x]),
+                    yaxis = list(title = "MMcf", xaxis = list(title = "Source: EIA API"))
+                )
+        } else {
+            p <- NULL
+        }
+
+        return(p)
+    })
+
+    output$cluster_plot <- plotly::renderPlotly({
+        if (input$view == "Cluster") {
+            p1 <- plotly::plot_ly(features,
+                y = ~trend,
+                color = ~ as.factor(get(paste("cluster", input$c_num, sep = ""))),
+                type = "box",
+                legendgroup = "c",
+                showlegend = TRUE
+            ) |>
+                plotly::layout(
+                    legend = list(title = list(text = "<b> Cluster </b>")),
+                    yaxis = list(title = "Trend")
+                )
+
+
+            p2 <- plotly::plot_ly(features,
+                y = ~linearity,
+                color = ~ as.factor(get(paste("cluster", input$c_num, sep = ""))),
+                type = "box",
+                legendgroup = "c",
+                showlegend = FALSE
+            ) |>
+                plotly::layout(yaxis = list(title = "Linearity"))
+
+
+            p3 <- plotly::plot_ly(features,
+                y = ~entropy,
+                color = ~ as.factor(get(paste("cluster", input$c_num, sep = ""))),
+                type = "box",
+                legendgroup = "c",
+                showlegend = FALSE
+            ) |>
+                plotly::layout(yaxis = list(title = "Entropy"))
+
+
+            p4 <- plotly::plot_ly(features,
+                y = ~x_acf1,
+                color = ~ as.factor(get(paste("cluster", input$c_num, sep = ""))),
+                type = "box",
+                legendgroup = "c",
+                showlegend = FALSE
+            ) |>
+                plotly::layout(yaxis = list(title = "ACF 1"))
+
+            p <- plotly::subplot(p1, p2, p3, p4, nrows = 2, titleY = TRUE)
         } else {
             p <- NULL
         }

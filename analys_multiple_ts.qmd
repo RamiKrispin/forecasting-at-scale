@@ -1,0 +1,8 @@
+---
+title: "Analys Multiple Time Series"
+author: "Rami Krispin"
+date: "10/26/2023"
+format: 
+  html:
+    code-fold: true
+---
